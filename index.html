@@ -288,50 +288,69 @@
     });
 
     function processImage(img) {
-      // Draw image to offscreen canvas, scaled to fit
       const offCanvas = document.createElement('canvas');
       const offCtx = offCanvas.getContext('2d');
       const scale = Math.min(displayW / img.width, displayH / img.height) * 0.85;
-      const w = img.width * scale;
-      const h = img.height * scale;
-      offCanvas.width = Math.round(w);
-      offCanvas.height = Math.round(h);
-      offCtx.drawImage(img, 0, 0, offCanvas.width, offCanvas.height);
+      const w = Math.round(img.width * scale);
+      const h = Math.round(img.height * scale);
+      offCanvas.width = w;
+      offCanvas.height = h;
+      offCtx.drawImage(img, 0, 0, w, h);
 
-      const imageData = offCtx.getImageData(0, 0, offCanvas.width, offCanvas.height);
+      const imageData = offCtx.getImageData(0, 0, w, h);
       const data = imageData.data;
-      const W = offCanvas.width, H = offCanvas.height;
 
-      // Grayscale + threshold to binary
-      const binary = new Uint8Array(W * H);
-      for (let i = 0; i < W * H; i++) {
+      // 1. Grayscale + saturation-aware threshold
+      const gray = new Float32Array(w * h);
+      for (let i = 0; i < w * h; i++) {
         const r = data[i * 4], g = data[i * 4 + 1], b = data[i * 4 + 2];
-        const gray = 0.299 * r + 0.587 * g + 0.114 * b;
-        binary[i] = gray < 128 ? 1 : 0;
+        const maxC = Math.max(r, g, b), minC = Math.min(r, g, b);
+        const sat = maxC > 0 ? (maxC - minC) / maxC : 0;
+        const g0 = 0.299 * r + 0.587 * g + 0.114 * b;
+        // Reject strongly colored pixels; keep dark grayscale
+        gray[i] = sat > 0.35 ? 255 : g0;
       }
 
-      // Find edge pixels (black pixels with at least one white neighbor)
-      const edgePixels = [];
-      for (let y = 1; y < H - 1; y++) {
-        for (let x = 1; x < W - 1; x++) {
-          if (binary[y * W + x] === 1) {
-            const hasWhiteNeighbor =
-              binary[(y - 1) * W + x] === 0 || binary[(y + 1) * W + x] === 0 ||
-              binary[y * W + (x - 1)] === 0 || binary[y * W + (x + 1)] === 0;
-            if (hasWhiteNeighbor) {
-              edgePixels.push({ x, y });
-            }
+      // 2. Light blur (3x3 box) — just enough to merge anti-aliased edges
+      const blurred = new Float32Array(w * h);
+      for (let y = 1; y < h - 1; y++) {
+        for (let x = 1; x < w - 1; x++) {
+          // Take the minimum of the pixel and its 4-neighbors (dilate dark)
+          // This preserves thin lines better than averaging
+          let minVal = gray[y * w + x];
+          minVal = Math.min(minVal, gray[(y-1)*w+x], gray[(y+1)*w+x],
+                           gray[y*w+x-1], gray[y*w+x+1]);
+          // Blend: mostly original, slightly dilated
+          blurred[y * w + x] = gray[y * w + x] * 0.6 + minVal * 0.4;
+        }
+      }
+
+      // 3. Threshold to binary — generous threshold to catch thin/light lines
+      const binary = new Uint8Array(w * h);
+      for (let i = 0; i < w * h; i++) {
+        binary[i] = blurred[i] < 140 ? 1 : 0;
+      }
+
+      // 4. Zhang-Suen thinning to get 1px skeleton
+      skeleton(binary, w, h);
+
+      // 3. Collect skeleton pixels
+      const skelPixels = [];
+      for (let y = 1; y < h - 1; y++) {
+        for (let x = 1; x < w - 1; x++) {
+          if (binary[y * w + x] === 1) {
+            skelPixels.push({ x, y });
           }
         }
       }
 
-      if (edgePixels.length < 10) {
-        hint.textContent = 'Could not detect edges. Try a clearer black-on-white image.';
+      if (skelPixels.length < 10) {
+        hint.textContent = 'Could not detect lines. Try a clearer black-on-white image.';
         return;
       }
 
-      // Order edge pixels via nearest-neighbor walk
-      const ordered = orderContour(edgePixels);
+      // 4. Trace connected chains, then link them into one path
+      const ordered = traceAndLink(skelPixels, w, h, binary);
 
       // Offset to center on main canvas
       const offsetX = (displayW - w) / 2;
@@ -341,7 +360,7 @@
       // Show the detected contour
       ctx.clearRect(0, 0, displayW, displayH);
       ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.moveTo(rawPoints[0].x, rawPoints[0].y);
       for (let i = 1; i < rawPoints.length; i++) {
@@ -354,69 +373,227 @@
       hint.textContent = 'Contour detected! Click Transform to animate.';
     }
 
-    function orderContour(pixels) {
-      // Nearest-neighbor walk to order edge pixels into a path
-      // Use a grid for fast lookup
-      const visited = new Set();
-      const grid = new Map();
-      for (let i = 0; i < pixels.length; i++) {
-        const key = pixels[i].x + ',' + pixels[i].y;
-        grid.set(key, i);
-      }
-
-      const ordered = [pixels[0]];
-      visited.add(0);
-      const searchRadius = [1, 2, 3, 5, 8, 13];
-
-      for (let step = 1; step < pixels.length; step++) {
-        const cur = ordered[ordered.length - 1];
-        let bestIdx = -1;
-        let bestDist = Infinity;
-
-        // Check nearby pixels first using grid
-        let found = false;
-        for (const r of searchRadius) {
-          for (let dy = -r; dy <= r; dy++) {
-            for (let dx = -r; dx <= r; dx++) {
-              const key = (cur.x + dx) + ',' + (cur.y + dy);
-              const idx = grid.get(key);
-              if (idx !== undefined && !visited.has(idx)) {
-                const d = dx * dx + dy * dy;
-                if (d < bestDist) {
-                  bestDist = d;
-                  bestIdx = idx;
-                }
+    // Zhang-Suen morphological thinning (produces 1px wide skeleton)
+    function skeleton(img, w, h) {
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (let step = 0; step < 2; step++) {
+          const toRemove = [];
+          for (let y = 1; y < h - 1; y++) {
+            for (let x = 1; x < w - 1; x++) {
+              if (img[y * w + x] === 0) continue;
+              const p2 = img[(y-1)*w+x], p3 = img[(y-1)*w+x+1],
+                    p4 = img[y*w+x+1],   p5 = img[(y+1)*w+x+1],
+                    p6 = img[(y+1)*w+x],  p7 = img[(y+1)*w+x-1],
+                    p8 = img[y*w+x-1],    p9 = img[(y-1)*w+x-1];
+              const neighbors = p2+p3+p4+p5+p6+p7+p8+p9;
+              if (neighbors < 2 || neighbors > 6) continue;
+              // Count 0->1 transitions in clockwise order
+              const seq = [p2,p3,p4,p5,p6,p7,p8,p9,p2];
+              let transitions = 0;
+              for (let i = 0; i < 8; i++) {
+                if (seq[i] === 0 && seq[i+1] === 1) transitions++;
               }
+              if (transitions !== 1) continue;
+              if (step === 0) {
+                if (p2 * p4 * p6 !== 0) continue;
+                if (p4 * p6 * p8 !== 0) continue;
+              } else {
+                if (p2 * p4 * p8 !== 0) continue;
+                if (p2 * p6 * p8 !== 0) continue;
+              }
+              toRemove.push(y * w + x);
             }
           }
-          if (bestIdx !== -1) { found = true; break; }
+          for (const idx of toRemove) {
+            img[idx] = 0;
+            changed = true;
+          }
+        }
+      }
+    }
+
+    // Trace connected components using flood-fill, then extract Euler-tour-like paths
+    function traceAndLink(pixels, w, h, binary) {
+      const pixelSet = new Set();
+      for (const p of pixels) pixelSet.add(p.x + ',' + p.y);
+      const visited = new Set();
+      const dirs = [[-1,-1],[-1,0],[-1,1],[0,1],[1,1],[1,0],[1,-1],[0,-1]];
+
+      // Flood-fill to find connected components
+      function floodFill(sx, sy) {
+        const component = [];
+        const stack = [[sx, sy]];
+        visited.add(sx + ',' + sy);
+        while (stack.length > 0) {
+          const [cx, cy] = stack.pop();
+          component.push({ x: cx, y: cy });
+          for (const [dx, dy] of dirs) {
+            const key = (cx+dx) + ',' + (cy+dy);
+            if (pixelSet.has(key) && !visited.has(key)) {
+              visited.add(key);
+              stack.push([cx+dx, cy+dy]);
+            }
+          }
+        }
+        return component;
+      }
+
+      // Find all connected components
+      const components = [];
+      for (const p of pixels) {
+        const key = p.x + ',' + p.y;
+        if (!visited.has(key)) {
+          const comp = floodFill(p.x, p.y);
+          components.push(comp);
+        }
+      }
+
+      // Filter: only remove very tiny noise fragments (< 0.3% of largest or < 8px)
+      const maxLen = Math.max(...components.map(c => c.length));
+      const minSize = Math.max(8, maxLen * 0.003);
+      const filtered = components.filter(c => c.length >= minSize);
+      filtered.sort((a, b) => b.length - a.length);
+
+      if (filtered.length === 0) return pixels.slice(0, 100);
+
+      // For each component, find an endpoint (degree-1 pixel) or any pixel to start,
+      // then do a depth-first walk that backtracks (Euler-tour style) to cover all pixels
+      function eulerWalk(comp) {
+        const compSet = new Set();
+        for (const p of comp) compSet.add(p.x + ',' + p.y);
+        const walked = new Set();
+
+        // Find degree of each pixel (number of neighbors in component)
+        function degree(x, y) {
+          let d = 0;
+          for (const [dx, dy] of dirs) {
+            if (compSet.has((x+dx) + ',' + (y+dy))) d++;
+          }
+          return d;
         }
 
-        // Fallback: brute force for remaining
-        if (!found) {
-          for (let i = 0; i < pixels.length; i++) {
-            if (visited.has(i)) continue;
-            const dx = pixels[i].x - cur.x, dy = pixels[i].y - cur.y;
-            const d = dx * dx + dy * dy;
-            if (d < bestDist) { bestDist = d; bestIdx = i; }
+        // Start from an endpoint (degree 1) if possible — gives a cleaner walk
+        let start = comp[0];
+        for (const p of comp) {
+          if (degree(p.x, p.y) === 1) { start = p; break; }
+        }
+
+        // DFS walk with backtracking — visits each pixel and backtracks to cover branches
+        const path = [];
+        const stack = [[start.x, start.y]];
+        walked.add(start.x + ',' + start.y);
+        path.push({ x: start.x, y: start.y });
+
+        while (stack.length > 0) {
+          const [cx, cy] = stack[stack.length - 1];
+          let found = false;
+          for (const [dx, dy] of dirs) {
+            const nx = cx + dx, ny = cy + dy;
+            const key = nx + ',' + ny;
+            if (compSet.has(key) && !walked.has(key)) {
+              walked.add(key);
+              stack.push([nx, ny]);
+              path.push({ x: nx, y: ny });
+              found = true;
+              break;
+            }
           }
+          if (!found) {
+            stack.pop();
+            // Backtrack: add the parent back to the path so the line retraces
+            if (stack.length > 0) {
+              path.push({ x: stack[stack.length-1][0], y: stack[stack.length-1][1] });
+            }
+          }
+        }
+        return path;
+      }
+
+      // Walk each component, then compress backtracking
+      const chains = filtered.map(comp => {
+        const path = eulerWalk(comp);
+        return compressBacktrack(path);
+      });
+
+      // Remove redundant backtracking: when the path retraces A->B->A,
+      // compress to just A->B (keep the forward trip, skip the return trip
+      // unless it leads to a new branch)
+      function compressBacktrack(path) {
+        if (path.length < 4) return path;
+        const compressed = [path[0]];
+        for (let i = 1; i < path.length; i++) {
+          const cur = path[i];
+          const prev = compressed[compressed.length - 1];
+          // Check if we're about to retrace: if the next point is our second-to-last
+          if (compressed.length >= 2) {
+            const pprev = compressed[compressed.length - 2];
+            if (cur.x === pprev.x && cur.y === pprev.y) {
+              // This is a backtrack step. Only keep it if the next point
+              // after this goes somewhere new (i.e., a junction leading to a new branch)
+              if (i + 1 < path.length) {
+                const next = path[i + 1];
+                if (next.x !== prev.x || next.y !== prev.y) {
+                  // Going to a new place after backtrack — keep the backtrack point
+                  compressed.push(cur);
+                }
+                // Otherwise skip this backtrack (dead-end retrace)
+              }
+              continue;
+            }
+          }
+          compressed.push(cur);
+        }
+        return compressed;
+      }
+
+      // Link all component paths together using nearest-endpoint greedy
+      let result = chains[0];
+      const used = new Set([0]);
+
+      for (let iter = 0; iter < chains.length - 1; iter++) {
+        // Try linking from both ends of current result
+        const head = result[0];
+        const tail = result[result.length - 1];
+        let bestIdx = -1, bestDist = Infinity, bestReverse = false, bestFromHead = false;
+
+        for (let i = 0; i < chains.length; i++) {
+          if (used.has(i)) continue;
+          const c = chains[i];
+          const cHead = c[0], cTail = c[c.length - 1];
+          // tail -> cHead
+          let d = (cHead.x-tail.x)**2 + (cHead.y-tail.y)**2;
+          if (d < bestDist) { bestDist = d; bestIdx = i; bestReverse = false; bestFromHead = false; }
+          // tail -> cTail (reverse chain)
+          d = (cTail.x-tail.x)**2 + (cTail.y-tail.y)**2;
+          if (d < bestDist) { bestDist = d; bestIdx = i; bestReverse = true; bestFromHead = false; }
+          // head -> cHead (prepend reversed chain)
+          d = (cHead.x-head.x)**2 + (cHead.y-head.y)**2;
+          if (d < bestDist) { bestDist = d; bestIdx = i; bestReverse = true; bestFromHead = true; }
+          // head -> cTail (prepend chain)
+          d = (cTail.x-head.x)**2 + (cTail.y-head.y)**2;
+          if (d < bestDist) { bestDist = d; bestIdx = i; bestReverse = false; bestFromHead = true; }
         }
 
         if (bestIdx === -1) break;
-        visited.add(bestIdx);
-        ordered.push(pixels[bestIdx]);
+        used.add(bestIdx);
+        let next = bestReverse ? chains[bestIdx].slice().reverse() : chains[bestIdx];
+        if (bestFromHead) {
+          result = next.concat(result);
+        } else {
+          result = result.concat(next);
+        }
       }
 
-      // Subsample if too many points (keep ~2000 max for performance)
-      if (ordered.length > 2000) {
-        const step = ordered.length / 2000;
-        const subsampled = [];
-        for (let i = 0; i < 2000; i++) {
-          subsampled.push(ordered[Math.floor(i * step)]);
-        }
-        return subsampled;
+      // Subsample if too many points
+      if (result.length > 4000) {
+        const step = result.length / 4000;
+        const sub = [];
+        for (let i = 0; i < 4000; i++) sub.push(result[Math.floor(i * step)]);
+        return sub;
       }
-      return ordered;
+      return result;
     }
 
     // ========== PATH RESAMPLING ==========
