@@ -702,7 +702,13 @@
     function animate(timestamp) {
       if (lastTimestamp === 0) lastTimestamp = timestamp;
       const speedVal = parseInt(speedSlider.value);
-      const period = 12000 / speedVal; // ms per cycle
+      // In walkthrough, scale period with epicycle count so complex drawings move slower
+      let period = 12000 / speedVal;
+      if (walkthrough) {
+        const n = parseInt(epicycleSlider.value);
+        // More epicycles = longer period. Base: 20s at 100 epicycles, scales linearly
+        period = (8000 + n * 120) / speedVal;
+      }
       const dt = (timestamp - lastTimestamp) / period;
       lastTimestamp = timestamp;
       const prevTime = time;
@@ -894,7 +900,8 @@
       walkthroughBtn.classList.toggle('active', walkthrough);
       walkthroughBtn.textContent = walkthrough ? 'Exit Walkthrough' : 'Walkthrough';
       if (walkthrough) {
-        speedSlider.value = 1;
+        // Default to slow speed but user can still adjust
+        speedSlider.value = 2;
         time = 0;
         trailPoints = [];
         lastTimestamp = 0;
