@@ -2,6 +2,10 @@
 
 Turn any doodle into a swarm of rotating vectors. LaplaceDraw takes a drawing — either sketched on the canvas or uploaded as an image — and redraws it using a chain of Fourier epicycles, showing the underlying equation as it traces the curve.
 
+**Live demo:** <https://laplacedraw.srikardurgi.com/>
+
+![LaplaceDraw hero](assets/hero.png)
+
 ![LaplaceDraw](https://img.shields.io/badge/single--file-HTML-blue) ![No build](https://img.shields.io/badge/build-none-brightgreen)
 
 ## What it does
