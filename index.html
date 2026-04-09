@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LaplaceDraw</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #1a1a2e;
+      color: #e0e0e0;
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+      padding: 20px;
+    }
+    h1 {
+      font-size: 2rem;
+      margin-bottom: 4px;
+      color: #e94560;
+      letter-spacing: 2px;
+    }
+    .subtitle {
+      font-size: 0.85rem;
+      color: #888;
+      margin-bottom: 16px;
+    }
+    canvas {
+      background: #0f0f23;
+      border: 1px solid #2a2a4a;
+      border-radius: 8px;
+      cursor: crosshair;
+      display: block;
+      max-width: 100%;
+    }
+    .controls {
+      display: flex;
+      gap: 10px;
+      margin-top: 16px;
+      flex-wrap: wrap;
+      justify-content: center;
+      align-items: center;
+    }
+    button {
+      background: #16213e;
+      color: #e0e0e0;
+      border: 1px solid #2a2a4a;
+      padding: 10px 24px;
+      border-radius: 6px;
+      font-size: 0.95rem;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    button:hover { background: #e94560; border-color: #e94560; color: #fff; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; background: #16213e; border-color: #2a2a4a; color: #888; }
+    .slider-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #aaa;
+      font-size: 0.85rem;
+    }
+    .slider-group input[type="range"] {
+      width: 140px;
+      accent-color: #e94560;
+    }
+    .slider-group .value {
+      color: #e94560;
+      font-weight: bold;
+      min-width: 36px;
+      text-align: right;
+    }
+    .animate-controls { display: none; }
+    .draw-controls { display: flex; }
+    .hint {
+      font-size: 0.75rem;
+      color: #555;
+      margin-top: 8px;
+    }
+    input[type="file"] { display: none; }
+    #equationBox {
+      display: none;
+      width: 800px;
+      max-width: 100%;
+      max-height: 200px;
+      margin-top: 12px;
+      padding: 14px 18px;
+      background: #0f0f23;
+      border: 1px solid #2a2a4a;
+      border-radius: 8px;
+      font-family: Georgia, 'Times New Roman', serif;
+      font-size: 1.05rem;
+      line-height: 1.8;
+      color: #e0e0e0;
+      user-select: text;
+      overflow-y: auto;
+      white-space: normal;
+      word-wrap: break-word;
+    }
+    #equationBox .eq-label {
+      display: flex;
+      justify-content: space-between;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 0.75rem;
+      color: #666;
+      margin-bottom: 6px;
+    }
+    #equationBox .eq-body { white-space: normal; word-wrap: break-word; }
+    #equationBox .amp { color: #e94560; }
+    #equationBox .exp { color: #7ec8e3; }
+    #equationBox .op { color: #666; }
+    #equationBox sup { font-size: 0.7em; vertical-align: super; line-height: 0; }
+    #refCanvas {
+      display: none;
+      position: absolute;
+      top: 0;
+      right: 0;
+      border: 1px solid #2a2a4a;
+      border-radius: 0 8px 0 8px;
+      background: rgba(15, 15, 35, 0.85);
+    }
+    .canvas-wrap {
+      position: relative;
+      display: inline-block;
+    }
+    #walkthroughBtn.active {
+      background: #e94560;
+      border-color: #e94560;
+      color: #fff;
+    }
+  </style>
+</head>
+<body>
+  <h1>LaplaceDraw</h1>
+  <p class="subtitle">Fourier epicycles from your doodles</p>
+  <div class="canvas-wrap">
+    <canvas id="canvas" width="800" height="600"></canvas>
+    <canvas id="refCanvas" width="160" height="120"></canvas>
+  </div>
+
+  <div class="controls draw-controls" id="drawControls">
+    <button id="transformBtn" disabled>Transform</button>
+    <button id="uploadBtn">Upload Image</button>
+    <button id="clearBtn">Clear</button>
+    <input type="file" id="fileInput" accept="image/*">
+  </div>
+
+  <div class="controls animate-controls" id="animateControls">
+    <div class="slider-group">
+      <label>Epicycles:</label>
+      <input type="range" id="epicycleSlider" min="1" max="100" value="100">
+      <span class="value" id="epicycleCount">100</span>
+    </div>
+    <div class="slider-group">
+      <label>Speed:</label>
+      <input type="range" id="speedSlider" min="1" max="10" value="4">
+    </div>
+    <button id="walkthroughBtn">Walkthrough</button>
+    <button id="backBtn">Back</button>
+  </div>
+
+  <div id="equationBox">
+    <div class="eq-label">
+      <span>Fourier Series</span>
+      <span id="eqTime"></span>
+    </div>
+    <div class="eq-body" id="eqBody"></div>
+  </div>
+
+  <p class="hint" id="hint">Draw a closed shape on the canvas</p>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const drawControls = document.getElementById('drawControls');
+    const animateControls = document.getElementById('animateControls');
+    const transformBtn = document.getElementById('transformBtn');
+    const uploadBtn = document.getElementById('uploadBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const backBtn = document.getElementById('backBtn');
+    const fileInput = document.getElementById('fileInput');
+    const epicycleSlider = document.getElementById('epicycleSlider');
+    const epicycleCountEl = document.getElementById('epicycleCount');
+    const speedSlider = document.getElementById('speedSlider');
+    const hint = document.getElementById('hint');
+    const equationBox = document.getElementById('equationBox');
+    const eqBody = document.getElementById('eqBody');
+    const eqTime = document.getElementById('eqTime');
+    const refCanvas = document.getElementById('refCanvas');
+    const refCtx = refCanvas.getContext('2d');
+    const walkthroughBtn = document.getElementById('walkthroughBtn');
+
+    // --- DPI scaling ---
+    const dpr = window.devicePixelRatio || 1;
+    const displayW = 800, displayH = 600;
+    canvas.width = displayW * dpr;
+    canvas.height = displayH * dpr;
+    canvas.style.width = displayW + 'px';
+    canvas.style.height = displayH + 'px';
+    ctx.scale(dpr, dpr);
+
+    // --- State ---
+    let mode = 'draw'; // 'draw' | 'animate'
+    let rawPoints = [];
+    let isDrawing = false;
+    let coefficients = [];
+    let numEpicycles = 0;
+    let time = 0;
+    let trailPoints = [];
+    let animationId = null;
+    let lastTimestamp = 0;
+    let centroidX = 0, centroidY = 0;
+    let walkthrough = false;
+    let refImageData = null; // stores original drawing snapshot
+
+    // ========== DRAWING INPUT ==========
+    function getPos(e) {
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = displayW / rect.width;
+      const scaleY = displayH / rect.height;
+      if (e.touches) {
+        return {
+          x: (e.touches[0].clientX - rect.left) * scaleX,
+          y: (e.touches[0].clientY - rect.top) * scaleY
+        };
+      }
+      return {
+        x: (e.clientX - rect.left) * scaleX,
+        y: (e.clientY - rect.top) * scaleY
+      };
+    }
+
+    function startDraw(e) {
+      if (mode !== 'draw') return;
+      e.preventDefault();
+      isDrawing = true;
+      const pos = getPos(e);
+      rawPoints = [pos];
+      ctx.clearRect(0, 0, displayW, displayH);
+      ctx.beginPath();
+      ctx.moveTo(pos.x, pos.y);
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2.5;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+    }
+
+    function moveDraw(e) {
+      if (!isDrawing) return;
+      e.preventDefault();
+      const pos = getPos(e);
+      rawPoints.push(pos);
+      ctx.lineTo(pos.x, pos.y);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(pos.x, pos.y);
+      transformBtn.disabled = rawPoints.length < 10;
+    }
+
+    function endDraw(e) {
+      if (!isDrawing) return;
+      e.preventDefault();
+      isDrawing = false;
+    }
+
+    canvas.addEventListener('mousedown', startDraw);
+    canvas.addEventListener('mousemove', moveDraw);
+    canvas.addEventListener('mouseup', endDraw);
+    canvas.addEventListener('mouseleave', endDraw);
+    canvas.addEventListener('touchstart', startDraw, { passive: false });
+    canvas.addEventListener('touchmove', moveDraw, { passive: false });
+    canvas.addEventListener('touchend', endDraw, { passive: false });
+
+    // ========== IMAGE UPLOAD + EDGE DETECTION ==========
+    uploadBtn.addEventListener('click', () => fileInput.click());
+
+    fileInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const img = new Image();
+      img.onload = () => {
+        processImage(img);
+        fileInput.value = '';
+      };
+      img.src = URL.createObjectURL(file);
+    });
+
+    function processImage(img) {
+      // Draw image to offscreen canvas, scaled to fit
+      const offCanvas = document.createElement('canvas');
+      const offCtx = offCanvas.getContext('2d');
+      const scale = Math.min(displayW / img.width, displayH / img.height) * 0.85;
+      const w = img.width * scale;
+      const h = img.height * scale;
+      offCanvas.width = Math.round(w);
+      offCanvas.height = Math.round(h);
+      offCtx.drawImage(img, 0, 0, offCanvas.width, offCanvas.height);
+
+      const imageData = offCtx.getImageData(0, 0, offCanvas.width, offCanvas.height);
+      const data = imageData.data;
+      const W = offCanvas.width, H = offCanvas.height;
+
+      // Grayscale + threshold to binary
+      const binary = new Uint8Array(W * H);
+      for (let i = 0; i < W * H; i++) {
+        const r = data[i * 4], g = data[i * 4 + 1], b = data[i * 4 + 2];
+        const gray = 0.299 * r + 0.587 * g + 0.114 * b;
+        binary[i] = gray < 128 ? 1 : 0;
+      }
+
+      // Find edge pixels (black pixels with at least one white neighbor)
+      const edgePixels = [];
+      for (let y = 1; y < H - 1; y++) {
+        for (let x = 1; x < W - 1; x++) {
+          if (binary[y * W + x] === 1) {
+            const hasWhiteNeighbor =
+              binary[(y - 1) * W + x] === 0 || binary[(y + 1) * W + x] === 0 ||
+              binary[y * W + (x - 1)] === 0 || binary[y * W + (x + 1)] === 0;
+            if (hasWhiteNeighbor) {
+              edgePixels.push({ x, y });
+            }
+          }
+        }
+      }
+
+      if (edgePixels.length < 10) {
+        hint.textContent = 'Could not detect edges. Try a clearer black-on-white image.';
+        return;
+      }
+
+      // Order edge pixels via nearest-neighbor walk
+      const ordered = orderContour(edgePixels);
+
+      // Offset to center on main canvas
+      const offsetX = (displayW - w) / 2;
+      const offsetY = (displayH - h) / 2;
+      rawPoints = ordered.map(p => ({ x: p.x + offsetX, y: p.y + offsetY }));
+
+      // Show the detected contour
+      ctx.clearRect(0, 0, displayW, displayH);
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(rawPoints[0].x, rawPoints[0].y);
+      for (let i = 1; i < rawPoints.length; i++) {
+        ctx.lineTo(rawPoints[i].x, rawPoints[i].y);
+      }
+      ctx.closePath();
+      ctx.stroke();
+
+      transformBtn.disabled = false;
+      hint.textContent = 'Contour detected! Click Transform to animate.';
+    }
+
+    function orderContour(pixels) {
+      // Nearest-neighbor walk to order edge pixels into a path
+      // Use a grid for fast lookup
+      const visited = new Set();
+      const grid = new Map();
+      for (let i = 0; i < pixels.length; i++) {
+        const key = pixels[i].x + ',' + pixels[i].y;
+        grid.set(key, i);
+      }
+
+      const ordered = [pixels[0]];
+      visited.add(0);
+      const searchRadius = [1, 2, 3, 5, 8, 13];
+
+      for (let step = 1; step < pixels.length; step++) {
+        const cur = ordered[ordered.length - 1];
+        let bestIdx = -1;
+        let bestDist = Infinity;
+
+        // Check nearby pixels first using grid
+        let found = false;
+        for (const r of searchRadius) {
+          for (let dy = -r; dy <= r; dy++) {
+            for (let dx = -r; dx <= r; dx++) {
+              const key = (cur.x + dx) + ',' + (cur.y + dy);
+              const idx = grid.get(key);
+              if (idx !== undefined && !visited.has(idx)) {
+                const d = dx * dx + dy * dy;
+                if (d < bestDist) {
+                  bestDist = d;
+                  bestIdx = idx;
+                }
+              }
+            }
+          }
+          if (bestIdx !== -1) { found = true; break; }
+        }
+
+        // Fallback: brute force for remaining
+        if (!found) {
+          for (let i = 0; i < pixels.length; i++) {
+            if (visited.has(i)) continue;
+            const dx = pixels[i].x - cur.x, dy = pixels[i].y - cur.y;
+            const d = dx * dx + dy * dy;
+            if (d < bestDist) { bestDist = d; bestIdx = i; }
+          }
+        }
+
+        if (bestIdx === -1) break;
+        visited.add(bestIdx);
+        ordered.push(pixels[bestIdx]);
+      }
+
+      // Subsample if too many points (keep ~2000 max for performance)
+      if (ordered.length > 2000) {
+        const step = ordered.length / 2000;
+        const subsampled = [];
+        for (let i = 0; i < 2000; i++) {
+          subsampled.push(ordered[Math.floor(i * step)]);
+        }
+        return subsampled;
+      }
+      return ordered;
+    }
+
+    // ========== PATH RESAMPLING ==========
+    function resamplePath(points, N) {
+      // Close the path
+      const first = points[0], last = points[points.length - 1];
+      const dx = first.x - last.x, dy = first.y - last.y;
+      if (Math.sqrt(dx * dx + dy * dy) > 5) {
+        points = [...points, { ...first }];
+      }
+
+      // Compute cumulative arc lengths
+      const arcLengths = [0];
+      for (let i = 1; i < points.length; i++) {
+        const px = points[i].x - points[i - 1].x;
+        const py = points[i].y - points[i - 1].y;
+        arcLengths.push(arcLengths[i - 1] + Math.sqrt(px * px + py * py));
+      }
+      const totalLength = arcLengths[arcLengths.length - 1];
+      if (totalLength === 0) return points;
+
+      // Resample evenly
+      const sampled = [];
+      for (let j = 0; j < N; j++) {
+        const target = (j * totalLength) / N;
+        // Binary search for segment
+        let lo = 0, hi = arcLengths.length - 1;
+        while (lo < hi - 1) {
+          const mid = (lo + hi) >> 1;
+          if (arcLengths[mid] <= target) lo = mid; else hi = mid;
+        }
+        const segLen = arcLengths[hi] - arcLengths[lo];
+        const t = segLen > 0 ? (target - arcLengths[lo]) / segLen : 0;
+        sampled.push({
+          x: points[lo].x + t * (points[hi].x - points[lo].x),
+          y: points[lo].y + t * (points[hi].y - points[lo].y)
+        });
+      }
+      return sampled;
+    }
+
+    // ========== DFT ==========
+    function computeDFT(points) {
+      const N = points.length;
+      const result = [];
+      for (let k = 0; k < N; k++) {
+        let re = 0, im = 0;
+        for (let n = 0; n < N; n++) {
+          const angle = -(2 * Math.PI * k * n) / N;
+          re += points[n].x * Math.cos(angle) - points[n].y * Math.sin(angle);
+          im += points[n].x * Math.sin(angle) + points[n].y * Math.cos(angle);
+        }
+        re /= N;
+        im /= N;
+        let freq = k;
+        if (freq > N / 2) freq -= N;
+        result.push({
+          freq,
+          re,
+          im,
+          amplitude: Math.sqrt(re * re + im * im),
+          phase: Math.atan2(im, re)
+        });
+      }
+      // Sort by amplitude descending
+      result.sort((a, b) => b.amplitude - a.amplitude);
+      return result;
+    }
+
+    // ========== ANIMATION ==========
+    function startAnimation() {
+      const N = Math.min(rawPoints.length, 1024);
+      const sampled = resamplePath(rawPoints, N);
+
+      // Center points around origin, store centroid for animation offset
+      centroidX = 0; centroidY = 0;
+      for (const p of sampled) { centroidX += p.x; centroidY += p.y; }
+      centroidX /= sampled.length;
+      centroidY /= sampled.length;
+      const centered = sampled.map(p => ({ x: p.x - centroidX, y: p.y - centroidY }));
+
+      // Snapshot the original drawing for reference
+      drawReferenceImage();
+
+      hint.textContent = 'Computing Fourier transform...';
+      // Use setTimeout to allow UI to update
+      setTimeout(() => {
+        coefficients = computeDFT(centered);
+        numEpicycles = coefficients.length;
+        epicycleSlider.max = numEpicycles;
+        epicycleSlider.value = numEpicycles;
+        epicycleCountEl.textContent = numEpicycles;
+        time = 0;
+        trailPoints = [];
+        mode = 'animate';
+        drawControls.style.display = 'none';
+        animateControls.style.display = 'flex';
+        equationBox.style.display = 'block';
+        hint.textContent = 'Adjust sliders to control the visualization';
+        canvas.style.cursor = 'default';
+        lastTimestamp = 0;
+        animationId = requestAnimationFrame(animate);
+      }, 10);
+    }
+
+    function animate(timestamp) {
+      if (lastTimestamp === 0) lastTimestamp = timestamp;
+      const speedVal = parseInt(speedSlider.value);
+      const period = 12000 / speedVal; // ms per cycle
+      const dt = (timestamp - lastTimestamp) / period;
+      lastTimestamp = timestamp;
+      const prevTime = time;
+      time = (time + dt) % 1;
+      // Clear trail on cycle wrap
+      if (time < prevTime) {
+        trailPoints = [];
+      }
+
+      const n = parseInt(epicycleSlider.value);
+
+      // First pass: compute the pen tip position (needed for walkthrough camera)
+      let tipX = centroidX, tipY = centroidY;
+      for (let i = 0; i < n; i++) {
+        const { freq, amplitude, phase } = coefficients[i];
+        const angle = freq * time * 2 * Math.PI + phase;
+        tipX += amplitude * Math.cos(angle);
+        tipY += amplitude * Math.sin(angle);
+      }
+
+      // Set up camera transform
+      ctx.clearRect(0, 0, displayW, displayH);
+      ctx.save();
+      if (walkthrough) {
+        const zoom = 2.5;
+        const camX = displayW / 2 - tipX * zoom;
+        const camY = displayH / 2 - tipY * zoom;
+        ctx.translate(camX, camY);
+        ctx.scale(zoom, zoom);
+      }
+
+      // Draw epicycles — start from centroid
+      let x = centroidX, y = centroidY;
+      for (let i = 0; i < n; i++) {
+        const { freq, amplitude, phase } = coefficients[i];
+        const prevX = x, prevY = y;
+        const angle = freq * time * 2 * Math.PI + phase;
+        x += amplitude * Math.cos(angle);
+        y += amplitude * Math.sin(angle);
+
+        // Draw circle
+        ctx.beginPath();
+        ctx.arc(prevX, prevY, amplitude, 0, 2 * Math.PI);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+        ctx.lineWidth = walkthrough ? 0.5 : 1;
+        ctx.stroke();
+
+        // Draw vector
+        ctx.beginPath();
+        ctx.moveTo(prevX, prevY);
+        ctx.lineTo(x, y);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+        ctx.lineWidth = walkthrough ? 0.75 : 1.5;
+        ctx.stroke();
+      }
+
+      // Record trail point (kept for the entire cycle, cleared on wrap)
+      trailPoints.push({ x, y });
+
+      // Draw trail
+      if (trailPoints.length > 1) {
+        ctx.beginPath();
+        ctx.moveTo(trailPoints[0].x, trailPoints[0].y);
+        for (let i = 1; i < trailPoints.length; i++) {
+          ctx.lineTo(trailPoints[i].x, trailPoints[i].y);
+        }
+        ctx.strokeStyle = '#e94560';
+        ctx.lineWidth = walkthrough ? 1 : 2;
+        ctx.stroke();
+      }
+
+      // Draw pen dot
+      ctx.beginPath();
+      ctx.arc(x, y, walkthrough ? 2 : 4, 0, 2 * Math.PI);
+      ctx.fillStyle = '#e94560';
+      ctx.fill();
+
+      // Line from last vector tip to trail
+      if (trailPoints.length > 0) {
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(trailPoints[trailPoints.length - 1].x, trailPoints[trailPoints.length - 1].y);
+        ctx.strokeStyle = 'rgba(233, 69, 96, 0.5)';
+        ctx.lineWidth = walkthrough ? 0.5 : 1;
+        ctx.stroke();
+      }
+
+      ctx.restore();
+
+      // Update equation HTML
+      updateEquation(n, time);
+
+      animationId = requestAnimationFrame(animate);
+    }
+
+    let equationHtml = '';
+    let lastEqN = 0;
+
+    function buildEquation(n) {
+      let html = '<span style="color:#e0e0e0">f</span><span class="op">(</span><span style="color:#e0e0e0">t</span><span class="op">) = </span>';
+      for (let i = 0; i < n; i++) {
+        const { freq, amplitude } = coefficients[i];
+        if (i > 0) html += ' <span class="op">+</span> ';
+        const freqStr = freq < 0 ? `(${freq})` : `${freq}`;
+        html += `<span class="amp">${amplitude.toFixed(1)}</span>` +
+                `<span class="exp"> e<sup>i\u00B72\u03C0\u00B7${freqStr}\u00B7t</sup></span>`;
+      }
+      return html;
+    }
+
+    function updateEquation(n, t) {
+      eqTime.textContent = `t = ${t.toFixed(3)}`;
+      // Only rebuild HTML when epicycle count changes (not every frame)
+      if (n !== lastEqN) {
+        lastEqN = n;
+        equationHtml = buildEquation(n);
+        eqBody.innerHTML = equationHtml;
+      }
+    }
+
+    // ========== REFERENCE DRAWING ==========
+    function drawReferenceImage() {
+      // Draw the original path onto the reference mini canvas
+      const rw = 160, rh = 120;
+      refCanvas.width = rw * dpr;
+      refCanvas.height = rh * dpr;
+      refCanvas.style.width = rw + 'px';
+      refCanvas.style.height = rh + 'px';
+      refCtx.scale(dpr, dpr);
+      refCtx.clearRect(0, 0, rw, rh);
+      refCtx.fillStyle = 'rgba(15, 15, 35, 0.85)';
+      refCtx.fillRect(0, 0, rw, rh);
+      if (rawPoints.length < 2) return;
+      const sx = rw / displayW, sy = rh / displayH;
+      refCtx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+      refCtx.lineWidth = 1.5;
+      refCtx.lineCap = 'round';
+      refCtx.lineJoin = 'round';
+      refCtx.beginPath();
+      refCtx.moveTo(rawPoints[0].x * sx, rawPoints[0].y * sy);
+      for (let i = 1; i < rawPoints.length; i++) {
+        refCtx.lineTo(rawPoints[i].x * sx, rawPoints[i].y * sy);
+      }
+      refCtx.stroke();
+      // Label
+      refCtx.fillStyle = '#666';
+      refCtx.font = '9px system-ui, sans-serif';
+      refCtx.fillText('Original', 4, 12);
+      refCanvas.style.display = 'block';
+    }
+
+    // ========== CONTROLS ==========
+    transformBtn.addEventListener('click', () => {
+      if (rawPoints.length < 10) return;
+      startAnimation();
+    });
+
+    clearBtn.addEventListener('click', () => {
+      resetToDrawMode();
+    });
+
+    backBtn.addEventListener('click', () => {
+      resetToDrawMode();
+    });
+
+    function resetToDrawMode() {
+      if (animationId) cancelAnimationFrame(animationId);
+      animationId = null;
+      mode = 'draw';
+      rawPoints = [];
+      coefficients = [];
+      trailPoints = [];
+      time = 0;
+      ctx.clearRect(0, 0, displayW, displayH);
+      drawControls.style.display = 'flex';
+      animateControls.style.display = 'none';
+      equationBox.style.display = 'none';
+      refCanvas.style.display = 'none';
+      transformBtn.disabled = true;
+      canvas.style.cursor = 'crosshair';
+      hint.textContent = 'Draw a closed shape on the canvas';
+      walkthrough = false;
+      walkthroughBtn.classList.remove('active');
+      walkthroughBtn.textContent = 'Walkthrough';
+    }
+
+    walkthroughBtn.addEventListener('click', () => {
+      walkthrough = !walkthrough;
+      walkthroughBtn.classList.toggle('active', walkthrough);
+      walkthroughBtn.textContent = walkthrough ? 'Exit Walkthrough' : 'Walkthrough';
+      if (walkthrough) {
+        speedSlider.value = 1;
+        time = 0;
+        trailPoints = [];
+        lastTimestamp = 0;
+      }
+    });
+
+    epicycleSlider.addEventListener('input', () => {
+      epicycleCountEl.textContent = epicycleSlider.value;
+      time = 0;
+      trailPoints = [];
+    });
+
+    speedSlider.addEventListener('input', () => {
+      time = 0;
+      trailPoints = [];
+    });
+  </script>
+</body>
+</html>
