@@ -141,6 +141,41 @@
       border-color: #e94560;
       color: #fff;
     }
+    /* Fullscreen walkthrough layout */
+    body.walkthrough-fs {
+      padding: 0;
+      overflow: hidden;
+      background: #0f0f23;
+    }
+    body.walkthrough-fs h1,
+    body.walkthrough-fs .subtitle,
+    body.walkthrough-fs .hint,
+    body.walkthrough-fs #equationBox,
+    body.walkthrough-fs #refCanvas,
+    body.walkthrough-fs #drawControls {
+      display: none !important;
+    }
+    body.walkthrough-fs .canvas-wrap {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100vw; height: 100vh;
+    }
+    body.walkthrough-fs #canvas {
+      display: block;
+      background: #0f0f23;
+    }
+    body.walkthrough-fs .animate-controls {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 10;
+      background: rgba(15, 15, 35, 0.85);
+      border: 1px solid #2a2a4a;
+      border-radius: 10px;
+      padding: 10px 14px;
+      backdrop-filter: blur(6px);
+    }
   </style>
 </head>
 <body>
@@ -176,9 +211,14 @@
     </div>
     <div class="slider-group">
       <label>Speed:</label>
-      <input type="range" id="speedSlider" min="1" max="10" value="4">
+      <input type="range" id="speedSlider" min="1" max="1000" value="200">
     </div>
     <button id="walkthroughBtn">Walkthrough</button>
+    <div class="slider-group" id="zoomGroup" style="display:none">
+      <label>Zoom:</label>
+      <input type="range" id="zoomSlider" min="1" max="100" step="0.1" value="1">
+      <span class="value" id="zoomValue">1.0×</span>
+    </div>
     <button id="backBtn">Back</button>
   </div>
 
@@ -212,15 +252,25 @@
     const refCanvas = document.getElementById('refCanvas');
     const refCtx = refCanvas.getContext('2d');
     const walkthroughBtn = document.getElementById('walkthroughBtn');
+    const zoomSlider = document.getElementById('zoomSlider');
+    const zoomValue = document.getElementById('zoomValue');
+    const zoomGroup = document.getElementById('zoomGroup');
 
     // --- DPI scaling ---
     const dpr = window.devicePixelRatio || 1;
     const displayW = 800, displayH = 600;
-    canvas.width = displayW * dpr;
-    canvas.height = displayH * dpr;
-    canvas.style.width = displayW + 'px';
-    canvas.style.height = displayH + 'px';
-    ctx.scale(dpr, dpr);
+    // Current CSS pixel dimensions of the canvas (changes in fullscreen walkthrough)
+    let cw = displayW, ch = displayH;
+
+    function applyCanvasSize(w, h) {
+      cw = w; ch = h;
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+      canvas.style.width = w + 'px';
+      canvas.style.height = h + 'px';
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    applyCanvasSize(displayW, displayH);
 
     // --- State ---
     let mode = 'draw'; // 'draw' | 'animate'
@@ -722,7 +772,8 @@
 
     function animate(timestamp) {
       if (lastTimestamp === 0) lastTimestamp = timestamp;
-      const speedVal = parseInt(speedSlider.value);
+      // Slider is 1..1000; divide by 50 so effective speed spans 0.02..20
+      const speedVal = parseInt(speedSlider.value) / 50;
       // In walkthrough, scale period with epicycle count so complex drawings move slower
       let period = 12000 / speedVal;
       if (walkthrough) {
@@ -751,15 +802,26 @@
       }
 
       // Set up camera transform
-      ctx.clearRect(0, 0, displayW, displayH);
+      ctx.clearRect(0, 0, cw, ch);
       ctx.save();
-      if (walkthrough) {
-        const zoom = 2.5;
-        const camX = displayW / 2 - tipX * zoom;
-        const camY = displayH / 2 - tipY * zoom;
-        ctx.translate(camX, camY);
-        ctx.scale(zoom, zoom);
+      // Fit the original displayW x displayH "drawing space" into the current canvas
+      const baseScale = Math.min(cw / displayW, ch / displayH);
+      const baseOffX = (cw - displayW * baseScale) / 2;
+      const baseOffY = (ch - displayH * baseScale) / 2;
+      const zoom = walkthrough ? parseFloat(zoomSlider.value) : 1;
+      let effectiveScale;
+      if (walkthrough && zoom > 1.0001) {
+        // Center the pen tip in the viewport at baseScale*zoom
+        effectiveScale = baseScale * zoom;
+        ctx.translate(cw / 2 - tipX * effectiveScale, ch / 2 - tipY * effectiveScale);
+        ctx.scale(effectiveScale, effectiveScale);
+      } else {
+        effectiveScale = baseScale;
+        ctx.translate(baseOffX, baseOffY);
+        ctx.scale(baseScale, baseScale);
       }
+      // Compensate line widths so strokes look consistent at any scale
+      const lw = 1 / effectiveScale;
 
       // Draw epicycles — start from centroid
       let x = centroidX, y = centroidY;
@@ -774,7 +836,7 @@
         ctx.beginPath();
         ctx.arc(prevX, prevY, amplitude, 0, 2 * Math.PI);
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
-        ctx.lineWidth = walkthrough ? 0.5 : 1;
+        ctx.lineWidth = lw;
         ctx.stroke();
 
         // Draw vector
@@ -782,7 +844,7 @@
         ctx.moveTo(prevX, prevY);
         ctx.lineTo(x, y);
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
-        ctx.lineWidth = walkthrough ? 0.75 : 1.5;
+        ctx.lineWidth = 1.5 * lw;
         ctx.stroke();
       }
 
@@ -797,13 +859,13 @@
           ctx.lineTo(trailPoints[i].x, trailPoints[i].y);
         }
         ctx.strokeStyle = '#e94560';
-        ctx.lineWidth = walkthrough ? 1 : 2;
+        ctx.lineWidth = 2 * lw;
         ctx.stroke();
       }
 
       // Draw pen dot
       ctx.beginPath();
-      ctx.arc(x, y, walkthrough ? 2 : 4, 0, 2 * Math.PI);
+      ctx.arc(x, y, 4 * lw, 0, 2 * Math.PI);
       ctx.fillStyle = '#e94560';
       ctx.fill();
 
@@ -813,7 +875,7 @@
         ctx.moveTo(x, y);
         ctx.lineTo(trailPoints[trailPoints.length - 1].x, trailPoints[trailPoints.length - 1].y);
         ctx.strokeStyle = 'rgba(233, 69, 96, 0.5)';
-        ctx.lineWidth = walkthrough ? 0.5 : 1;
+        ctx.lineWidth = lw;
         ctx.stroke();
       }
 
@@ -1024,20 +1086,60 @@
       walkthrough = false;
       walkthroughBtn.classList.remove('active');
       walkthroughBtn.textContent = 'Walkthrough';
+      zoomGroup.style.display = 'none';
+      zoomSlider.value = 1;
+      zoomValue.textContent = '1.0×';
+      document.body.classList.remove('walkthrough-fs');
+      applyCanvasSize(displayW, displayH);
+      if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+    }
+
+    function enterWalkthrough() {
+      walkthrough = true;
+      walkthroughBtn.classList.add('active');
+      walkthroughBtn.textContent = 'Exit Walkthrough';
+      zoomGroup.style.display = 'flex';
+      speedSlider.value = 100; // effective 2×, a slow default for walkthrough
+      zoomSlider.value = 1;
+      zoomValue.textContent = '1.0×';
+      time = 0;
+      trailPoints = [];
+      lastTimestamp = 0;
+      document.body.classList.add('walkthrough-fs');
+      applyCanvasSize(window.innerWidth, window.innerHeight);
+      document.documentElement.requestFullscreen?.().catch(() => {});
+    }
+
+    function exitWalkthrough() {
+      walkthrough = false;
+      walkthroughBtn.classList.remove('active');
+      walkthroughBtn.textContent = 'Walkthrough';
+      zoomGroup.style.display = 'none';
+      zoomSlider.value = 1;
+      zoomValue.textContent = '1.0×';
+      document.body.classList.remove('walkthrough-fs');
+      applyCanvasSize(displayW, displayH);
+      if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
     }
 
     walkthroughBtn.addEventListener('click', () => {
-      walkthrough = !walkthrough;
-      walkthroughBtn.classList.toggle('active', walkthrough);
-      walkthroughBtn.textContent = walkthrough ? 'Exit Walkthrough' : 'Walkthrough';
-      if (walkthrough) {
-        // Default to slow speed but user can still adjust
-        speedSlider.value = 2;
-        time = 0;
-        trailPoints = [];
-        lastTimestamp = 0;
-      }
+      if (walkthrough) exitWalkthrough();
+      else enterWalkthrough();
     });
+
+    document.addEventListener('fullscreenchange', () => {
+      // If user pressed Esc to leave fullscreen, also leave walkthrough
+      if (!document.fullscreenElement && walkthrough) exitWalkthrough();
+    });
+
+    window.addEventListener('resize', () => {
+      if (walkthrough) applyCanvasSize(window.innerWidth, window.innerHeight);
+    });
+
+    zoomSlider.addEventListener('input', () => {
+      zoomValue.textContent = parseFloat(zoomSlider.value).toFixed(1) + '×';
+    });
+
 
     epicycleSlider.addEventListener('input', () => {
       epicycleCountEl.textContent = epicycleSlider.value;
