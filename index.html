@@ -80,6 +80,17 @@
       margin-top: 8px;
     }
     input[type="file"] { display: none; }
+    select {
+      background: #1a1a2e;
+      color: #e0e0e0;
+      border: 1px solid #2a2a4a;
+      padding: 10px 14px;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    select:hover { border-color: #e94560; }
     #equationBox {
       display: none;
       width: 800px;
@@ -143,6 +154,16 @@
   <div class="controls draw-controls" id="drawControls">
     <button id="transformBtn" disabled>Transform</button>
     <button id="uploadBtn">Upload Image</button>
+    <select id="presetSelect">
+      <option value="">Preset equation…</option>
+      <option value="heart">Heart</option>
+      <option value="butterfly">Butterfly curve</option>
+      <option value="star">5-point star</option>
+      <option value="rose">Rose (4 petals)</option>
+      <option value="infinity">Lemniscate (∞)</option>
+      <option value="epicycloid">Epicycloid (spirograph)</option>
+      <option value="square">Square wave loop</option>
+    </select>
     <button id="clearBtn">Clear</button>
     <input type="file" id="fileInput" accept="image/*">
   </div>
@@ -879,6 +900,105 @@
 
     clearBtn.addEventListener('click', () => {
       resetToDrawMode();
+    });
+
+    // ========== PRESET EQUATIONS ==========
+    const presetCurves = {
+      // Classic heart: x = 16 sin³t,  y = 13 cos t − 5 cos 2t − 2 cos 3t − cos 4t
+      heart: (t) => {
+        const x = 16 * Math.pow(Math.sin(t), 3);
+        const y = -(13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t));
+        return { x, y };
+      },
+      // Fay's butterfly curve (1989)
+      butterfly: (t) => {
+        const r = Math.exp(Math.cos(t)) - 2 * Math.cos(4 * t) - Math.pow(Math.sin(t / 12), 5);
+        return { x: Math.sin(t) * r, y: -Math.cos(t) * r };
+      },
+      // 5-point star via alternating inner/outer radius
+      star: (t) => {
+        const k = 5;
+        const r = 1 + 0.6 * Math.cos(k * t);
+        // Sharpen corners
+        const rr = Math.pow(Math.abs(Math.cos(k * t / 2)), 3) * 8 + 4;
+        return { x: rr * Math.cos(t), y: rr * Math.sin(t) };
+      },
+      // 4-petal rose: r = cos(2θ)
+      rose: (t) => {
+        const r = Math.cos(2 * t);
+        return { x: r * Math.cos(t), y: r * Math.sin(t) };
+      },
+      // Lemniscate of Bernoulli
+      infinity: (t) => {
+        const d = 1 + Math.sin(t) * Math.sin(t);
+        return { x: Math.cos(t) / d, y: Math.sin(t) * Math.cos(t) / d };
+      },
+      // Epicycloid: small circle rolling outside a larger one (5 cusps)
+      epicycloid: (t) => {
+        const R = 5, r = 1;
+        const x = (R + r) * Math.cos(t) - r * Math.cos(((R + r) / r) * t);
+        const y = (R + r) * Math.sin(t) - r * Math.sin(((R + r) / r) * t);
+        return { x, y };
+      },
+      // Square traced via Fourier square wave in both axes
+      square: (t) => {
+        let x = 0, y = 0;
+        for (let k = 1; k <= 9; k += 2) {
+          x += Math.sin(k * t) / k;
+          y += Math.sin(k * (t + Math.PI / 2)) / k;
+        }
+        return { x, y };
+      }
+    };
+
+    function loadPreset(name) {
+      const fn = presetCurves[name];
+      if (!fn) return;
+      // Sample parametric curve
+      const samples = 800;
+      const pts = [];
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      for (let i = 0; i < samples; i++) {
+        const t = (i / samples) * 2 * Math.PI;
+        const p = fn(t);
+        pts.push(p);
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.y > maxY) maxY = p.y;
+      }
+      // Scale & center into the canvas with 60px padding
+      const pad = 60;
+      const availW = displayW - 2 * pad;
+      const availH = displayH - 2 * pad;
+      const w = maxX - minX || 1;
+      const h = maxY - minY || 1;
+      const scale = Math.min(availW / w, availH / h);
+      const cx = displayW / 2;
+      const cy = displayH / 2;
+      rawPoints = pts.map(p => ({
+        x: cx + (p.x - (minX + maxX) / 2) * scale,
+        y: cy + (p.y - (minY + maxY) / 2) * scale
+      }));
+      // Render on canvas as preview then immediately transform
+      ctx.clearRect(0, 0, displayW, displayH);
+      ctx.strokeStyle = '#e0e0e0';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(rawPoints[0].x, rawPoints[0].y);
+      for (let i = 1; i < rawPoints.length; i++) ctx.lineTo(rawPoints[i].x, rawPoints[i].y);
+      ctx.closePath();
+      ctx.stroke();
+      transformBtn.disabled = false;
+      startAnimation();
+    }
+
+    const presetSelect = document.getElementById('presetSelect');
+    presetSelect.addEventListener('change', (e) => {
+      const name = e.target.value;
+      if (!name) return;
+      loadPreset(name);
+      e.target.value = '';
     });
 
     backBtn.addEventListener('click', () => {
