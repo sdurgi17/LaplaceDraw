@@ -807,13 +807,24 @@
     let equationHtml = '';
     let lastEqN = 0;
 
+    function formatAmp(a) {
+      if (a === 0) return '0';
+      const abs = Math.abs(a);
+      if (abs >= 100) return a.toFixed(0);
+      if (abs >= 10)  return a.toFixed(1);
+      if (abs >= 1)   return a.toFixed(2);
+      if (abs >= 0.1) return a.toFixed(3);
+      if (abs >= 0.01) return a.toFixed(4);
+      return a.toExponential(2);
+    }
+
     function buildEquation(n) {
       let html = '<span style="color:#e0e0e0">f</span><span class="op">(</span><span style="color:#e0e0e0">t</span><span class="op">) = </span>';
       for (let i = 0; i < n; i++) {
         const { freq, amplitude } = coefficients[i];
         if (i > 0) html += ' <span class="op">+</span> ';
         const freqStr = freq < 0 ? `(${freq})` : `${freq}`;
-        html += `<span class="amp">${amplitude.toFixed(1)}</span>` +
+        html += `<span class="amp">${formatAmp(amplitude)}</span>` +
                 `<span class="exp"> e<sup>i\u00B72\u03C0\u00B7${freqStr}\u00B7t</sup></span>`;
       }
       return html;
