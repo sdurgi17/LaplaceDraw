@@ -216,7 +216,7 @@
     <button id="walkthroughBtn">Walkthrough</button>
     <div class="slider-group" id="zoomGroup" style="display:none">
       <label>Zoom:</label>
-      <input type="range" id="zoomSlider" min="1" max="100" step="0.1" value="1">
+      <input type="range" id="zoomSlider" min="1" max="1000" step="0.1" value="1">
       <span class="value" id="zoomValue">1.0×</span>
     </div>
     <button id="backBtn">Back</button>
@@ -308,14 +308,16 @@
       e.preventDefault();
       isDrawing = true;
       const pos = getPos(e);
-      rawPoints = [pos];
-      ctx.clearRect(0, 0, displayW, displayH);
+      // Append to the existing path instead of clearing — supports
+      // multi-stroke drawings. Clear button resets.
+      rawPoints.push(pos);
       ctx.beginPath();
       ctx.moveTo(pos.x, pos.y);
       ctx.strokeStyle = '#ffffff';
       ctx.lineWidth = 2.5;
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
+      transformBtn.disabled = rawPoints.length < 10;
     }
 
     function moveDraw(e) {
@@ -757,6 +759,7 @@
         epicycleSlider.max = numEpicycles;
         epicycleSlider.value = numEpicycles;
         epicycleCountEl.textContent = numEpicycles;
+        updateZoomRange();
         time = 0;
         trailPoints = [];
         mode = 'animate';
@@ -1141,10 +1144,33 @@
     });
 
 
+    // Auto-configure zoom slider range based on the smallest epicycle amplitude.
+    // The more epicycles (and the tinier the smallest one), the higher max zoom
+    // you need to actually see the high-frequency detail.
+    function updateZoomRange() {
+      if (!coefficients.length) return;
+      const n = parseInt(epicycleSlider.value) || coefficients.length;
+      let minAmp = Infinity;
+      for (let i = 0; i < n; i++) {
+        const a = coefficients[i].amplitude;
+        if (a > 0 && a < minAmp) minAmp = a;
+      }
+      // Target: smallest epicycle ≈ 12 CSS pixels on screen
+      let maxZoom = 12 / (minAmp || 1);
+      // Clamp to a sane window
+      maxZoom = Math.max(20, Math.min(2000, Math.round(maxZoom)));
+      zoomSlider.max = maxZoom;
+      if (parseFloat(zoomSlider.value) > maxZoom) {
+        zoomSlider.value = maxZoom;
+        zoomValue.textContent = maxZoom.toFixed(1) + '×';
+      }
+    }
+
     epicycleSlider.addEventListener('input', () => {
       epicycleCountEl.textContent = epicycleSlider.value;
       time = 0;
       trailPoints = [];
+      updateZoomRange();
     });
 
     speedSlider.addEventListener('input', () => {
